@@ -29,6 +29,8 @@ def create(data:SampleInput,u=Depends(editor),s=Depends(db)):
 def edit(i:int,data:SampleInput,u=Depends(editor),s=Depends(db)):
  r=s.get(Sample,i)
  if not r:raise HTTPException(404,'小时样本不存在')
+ # 锁定待修订样本行：与结算事务的行锁互斥，保证并发时结算要么用修订前整批依据、要么用修订后整批依据
+ s.query(Sample).filter_by(id=i).with_for_update().all()
  for k,v in data.model_dump().items():setattr(r,k,v)
  try:s.commit()
  except IntegrityError:s.rollback();raise HTTPException(409,'小时重复')

@@ -8,7 +8,7 @@
 
 上游是压力/气量/温度/开机台数和电表小时记录；本应用替代时间窗校验、特征配置、模型比选和评议留痕；下游是工艺负责人安排安全可控的试点。
 
-四页分别为耗电样本、特征方案、模型比选、节能评议。三类核心实体为Sample（小时计量）、Run（特征/alpha配置与冻结模型结果）、Review（观察、业务动作和签核）；另有User和Audit。
+四页分别为耗电样本、特征方案、模型比选、节能评议，第五页为试点结算。三类核心实体为Sample（小时计量）、Run（特征/alpha配置与冻结模型结果）、Review（观察、业务动作和签核）；结算域实体为Tariff（分时电价）、Pilot（关联成功Run与试点时段的节能试点）、Settlement（结算单据与缺口）、SettlementHour（逐小时入账依据）；另有User和Audit。
 
 |角色|权限|典型动作|
 |---|---|---|
@@ -40,6 +40,14 @@ docker compose exec -T backend python -m scripts.seed_demo
 7. 10:00 analyst起草“空载复核”，写明模型观察、安全边界和保持产量一致的试点动作。
 8. 10:10 admin签核后评议冻结；10:20 viewer下载 `airpower-review-<id>.json`。
 
+## 试点结算口径
+
+试点必须关联一个 `state=done` 的成功模型版本并指定含起止整点的试点时段。基准耗电不取旧预测表，而是用该版本**冻结的原单位系数与截距**，按试点各小时当前工况（压力/气量/温度/开机台数等所选特征）重新计算：`基准 = 截距 + Σ 原单位系数×当小时特征值`。逐小时 `节电=基准−实测kWh`，`收益=节电×当小时电价`，节电为负时负收益照计；合计等于逐小时入账金额之和。
+
+分时电价按生效时段（含起止整点）维护：试点每个小时须恰好命中一个电价。电价时段互相重叠、某小时缺价、或试点小时缺样本，结算都失败并在单据 `gaps` 中按 `sample_missing/price_missing/price_overlap` 列出小时与说明；失败不写任何逐小时账（不留半份账），补齐后可重试，重试产生新单据、不重复入账，成功后试点指向最新单据。
+
+并发与修订：结算事务对试点窗口内样本行和全部电价行加行锁，并对“窗口内样本+与窗口重叠电价”的整批依据计算 SHA-256 指纹（`basis_checksum`）。页面先取指纹再提交结算；结算期间样本/电价修订与事务互斥，若依据已变则后端按指纹拒绝重算（409），前端用最新完整依据重试，绝不混用新旧数据。已 `settled` 的单据随后续任何修订保持不变，重复结算请求直接拒绝。结算单据支持逐小时核对与 `airpower-settlement-<id>.json` 导出。
+
 ## 算法与口径
 
 输入为同站点本地连续整点小时记录：压力bar、气量m³/min、温度℃、开机台数、无关对照噪声和目标kWh。小时唯一且不得缺口；至少60小时；训练段所选列不得为常量；所有数值须有限。目标不会进入特征。
@@ -60,7 +68,7 @@ Nginx `/api/`转后端根路由，前端SPA回落。仅前端、后端和数据�
 
 本地开发可先启动db/redis，backend安装requirements并设DATABASE_URL/REDIS_URL/JWT_SECRET后运行 `uvicorn src.main:app --reload`；前端使用Nginx或同源代理。依赖固定在requirements.txt。
 
-变量见.env.example：COMPOSE_PROJECT_NAME、FRONTEND_PORT、BACKEND_PORT、DB_PORT、DB_PASSWORD、JWT_SECRET、SEED_DEMO、NETWORK_SUBNET。独立子网10.253.110.0/24规避当前机器地址池耗尽，迁移可调整。角色ROLES、任务STATES、特征FEATURES和评议REVIEW_STATES分别定义在后端src/constants/enums.py与前端src/constants/enums.js，schema校验在backend/src/schemas/business.py，持久化列见models/entities.py。
+变量见.env.example：COMPOSE_PROJECT_NAME、FRONTEND_PORT、BACKEND_PORT、DB_PORT、DB_PASSWORD、JWT_SECRET、SEED_DEMO、NETWORK_SUBNET。独立子网10.253.110.0/24规避当前机器地址池耗尽，迁移可调整。角色ROLES、任务STATES、特征FEATURES、评议REVIEW_STATES以及结算SETTLEMENT_STATES/缺口GAP_TYPES分别定义在后端src/constants/enums.py与前端src/constants/enums.js，schema校验在backend/src/schemas/business.py，持久化列见models/entities.py（试点结算迁移见migrations/002_settlement.sql），结算算法与并发依据在backend/src/services/settlement.py，后端用例在backend/tests/。
 
 ## 范围与交付
 

@@ -38,3 +38,27 @@ class ReviewInput(BaseModel):
  title:str=Field(min_length=2,max_length=100)
  finding:str=Field(min_length=8,max_length=2000)
  action:str=Field(min_length=8,max_length=2000)
+def hour_point(v):
+ d=datetime.fromisoformat(v)
+ if d.tzinfo or d.minute or d.second or d.microsecond:raise ValueError('使用工厂本地整点小时，不带时区偏移')
+ return d.strftime('%Y-%m-%dT%H:00')
+class HourRange(BaseModel):
+ start_hour:str
+ end_hour:str
+ @field_validator('start_hour','end_hour')
+ @classmethod
+ def point(cls,v):return hour_point(v)
+ @field_validator('end_hour')
+ @classmethod
+ def order(cls,v,info):
+  start=info.data.get('start_hour')
+  if start and not v>start:raise ValueError('结束小时须晚于开始小时（区间含起止整点）')
+  return v
+class TariffInput(HourRange):
+ name:str=Field(min_length=2,max_length=100)
+ price:float=Field(ge=0,le=100,allow_inf_nan=False)
+class PilotInput(HourRange):
+ name:str=Field(min_length=2,max_length=100)
+ run_id:int=Field(gt=0)
+class SettleInput(BaseModel):
+ basis_checksum:str=Field(default='',max_length=80)
